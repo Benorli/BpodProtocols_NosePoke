@@ -49,7 +49,7 @@ BpodSystem.Data.Custom.Jackpot(1) = false;
 BpodSystem.Data.Custom.RewardMagnitude = [TaskParameters.GUI.rewardAmount,TaskParameters.GUI.rewardAmount];
 BpodSystem.Data.Custom = orderfields(BpodSystem.Data.Custom);
 %server data
-BpodSystem.Data.Custom.Rig = getenv('computername');
+[~,BpodSystem.Data.Custom.Rig] = system('hostname');
 [~,BpodSystem.Data.Custom.Subject] = fileparts(fileparts(fileparts(fileparts(BpodSystem.DataPath))));
 
 %% Initialize plots
