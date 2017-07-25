@@ -52,6 +52,17 @@ BpodSystem.Data.Custom = orderfields(BpodSystem.Data.Custom);
 [~,BpodSystem.Data.Custom.Rig] = system('hostname');
 [~,BpodSystem.Data.Custom.Subject] = fileparts(fileparts(fileparts(fileparts(BpodSystem.DataPath))));
 
+%% Configuring PulsePal
+load PulsePalParamFeedback.mat
+BpodSystem.Data.Custom.PulsePalParamFeedback=PulsePalParamFeedback;
+clear PulsePalParamFeedback
+if ~BpodSystem.EmulatorMode
+    ProgramPulsePal(BpodSystem.Data.Custom.PulsePalParamFeedback);
+    SendCustomPulseTrain(1,cumsum(randi(9,1,601))/10000,(rand(1,601)-.5)*20); % White(?) noise on channel 1+2
+    SendCustomPulseTrain(2,cumsum(randi(9,1,601))/10000,(rand(1,601)-.5)*20);
+end
+
+
 %% Initialize plots
 BpodSystem.ProtocolFigures.SideOutcomePlotFig = figure('Position', [200 200 1000 200],'name','Outcome plot','numbertitle','off', 'MenuBar', 'none', 'Resize', 'off');
 BpodSystem.GUIHandles.SideOutcomePlot = axes('Position', [.075 .3 .89 .6]);
@@ -162,7 +173,7 @@ sma = AddState(sma, 'Name', 'water_RJackpot',...
 sma = AddState(sma, 'Name', 'EarlyWithdrawal',...
     'Timer', TaskParameters.GUI.EarlyWithdrawalTimeOut,...
     'StateChangeConditions', {'Tup','ITI'},...
-    'OutputActions', {});
+    'OutputActions', {'SoftCode',11});
 if TaskParameters.GUI.VI
     sma = AddState(sma, 'Name', 'ITI',...
         'Timer',exprnd(TaskParameters.GUI.FI),...
