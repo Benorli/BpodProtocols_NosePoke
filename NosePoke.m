@@ -15,6 +15,9 @@ if isempty(fieldnames(TaskParameters))
     TaskParameters.GUI.ChoiceDeadline = 10;
     TaskParameters.GUIPanels.General = {'Ports_LMR','FI','VI','ChoiceDeadline'};
     %"stimulus"
+    TaskParameters.GUI.PlayStimulus = 1;
+    TaskParameters.GUI.PlayStimulus.Style = 'popupmenu';
+    TaskParameters.GUI.PlayStimulus.String = {'No stim.','Click stim.','Freq. stim.'};
     TaskParameters.GUI.MinSampleTime = 0.05;
     TaskParameters.GUI.MaxSampleTime = 0.5;
     TaskParameters.GUI.AutoIncrSample = true;
@@ -22,6 +25,8 @@ if isempty(fieldnames(TaskParameters))
     TaskParameters.GUI.MinSampleIncr = 0.01;
     TaskParameters.GUI.MinSampleDecr = 0.005;
     TaskParameters.GUI.EarlyWithdrawalTimeOut = 1;
+    TaskParameters.GUI.EarlyWithdrawalNoise = true;
+    TaskParameters.GUI.EarlyWithdrawalNoise.Style='checkbox';
     TaskParameters.GUI.SampleTime = TaskParameters.GUI.MinSampleTime;
     TaskParameters.GUIMeta.SampleTime.Style = 'text';
     TaskParameters.GUIPanels.Sampling = {'MinSampleTime','MaxSampleTime','AutoIncrSample','MinSampleIncr','MinSampleDecr','EarlyWithdrawalTimeOut','SampleTime'};
@@ -40,8 +45,7 @@ if isempty(fieldnames(TaskParameters))
 end
 BpodParameterGUI('init', TaskParameters);
 
-%% Initializing data (trial type) vectors
-
+%% Initializing data (trial type) vectors and first values
 BpodSystem.Data.Custom.ChoiceLeft = NaN;
 BpodSystem.Data.Custom.SampleTime(1) = TaskParameters.GUI.MinSampleTime;
 BpodSystem.Data.Custom.EarlyWithdrawal(1) = false;
@@ -51,15 +55,28 @@ BpodSystem.Data.Custom = orderfields(BpodSystem.Data.Custom);
 %server data
 [~,BpodSystem.Data.Custom.Rig] = system('hostname');
 [~,BpodSystem.Data.Custom.Subject] = fileparts(fileparts(fileparts(fileparts(BpodSystem.DataPath))));
+BpodSystem.Data.Custom.PsychtoolboxStartup=false;
+BpodSystem.Data.Custom.MaxSampleTime = 1; %only relevant for max stimulus length
+[BpodSystem.Data.Custom.RightClickTrain,BpodSystem.Data.Custom.LeftClickTrain] = getClickStimulus(BpodSystem.Data.Custom.MaxSampleTime);
+BpodSystem.Data.Custom.FreqStimulus = getFreqStimulus(BpodSystem.Data.Custom.MaxSampleTime);
+
+
 
 %% Configuring PulsePal
+%% Configuring PulsePal
+load PulsePalParamStimulus.mat
 load PulsePalParamFeedback.mat
+BpodSystem.Data.Custom.PulsePalParamStimulus=PulsePalParamStimulus;
 BpodSystem.Data.Custom.PulsePalParamFeedback=PulsePalParamFeedback;
-clear PulsePalParamFeedback
+clear PulsePalParamFeedback PulsePalParamStimulus
 if ~BpodSystem.EmulatorMode
-    ProgramPulsePal(BpodSystem.Data.Custom.PulsePalParamFeedback);
-    SendCustomPulseTrain(1,cumsum(randi(9,1,601))/10000,(rand(1,601)-.5)*20); % White(?) noise on channel 1+2
-    SendCustomPulseTrain(2,cumsum(randi(9,1,601))/10000,(rand(1,601)-.5)*20);
+    ProgramPulsePal(BpodSystem.Data.Custom.PulsePalParamStimulus);
+    SendCustomPulseTrain(1, BpodSystem.Data.Custom.RightClickTrain, ones(1,length(BpodSystem.Data.Custom.RightClickTrain))*5);
+    SendCustomPulseTrain(2, BpodSystem.Data.Custom.LeftClickTrain, ones(1,length(BpodSystem.Data.Custom.LeftClickTrain))*5);
+    if TaskParamters.GUI.PlayStimulus == 3
+        InitiatePsychtoolbox();
+        PsychToolboxSoundServer('Load', 1, BpodSystem.Data.Custom.FreqStimulus);
+    end
 end
 
 
@@ -75,6 +92,7 @@ iTrial = 1;
 
 while RunSession
     TaskParameters = BpodParameterGUI('sync', TaskParameters);
+    InitiatePsychtoolbox();
     
     sma = stateMatrix(iTrial);
     SendStateMatrix(sma);
@@ -118,6 +136,26 @@ JackpotFactor = max(2,10 - sum(BpodSystem.Data.Custom.Jackpot));
 LeftValveTimeJackpot  = JackpotFactor*GetValveTimes(BpodSystem.Data.Custom.RewardMagnitude(iTrial,1), LeftPort);
 RightValveTimeJackpot  = JackpotFactor*GetValveTimes(BpodSystem.Data.Custom.RewardMagnitude(iTrial,2), RightPort);
 
+if TaskParameters.GUI.PlayStimulus == 1 %no
+    StimStartOutput = {''};
+    StimStart2Output = {''};
+    StimStopOutput = {''};
+elseif TaskParameters.GUI.PlayStimulus == 2 %click
+    StimStartOutput = {'BNCState',1};
+    StimStart2Output = {'BNCState',1};
+    StimStopOutput = {'BNCState',0};
+elseif TaskParameters.GUI.PlayStimulus == 3 %freq
+    StimStartOutput = {'SoftCode',21};
+    StimStopOutput = {'SoftCode',22};
+    StimStart2Output = {''};
+end
+
+if TaskParameters.GUI.EarlyWithdrawalNoise;
+    PunishSoundAction=11;
+else
+    PunishSoundAction=0;
+end
+
 sma = NewStateMatrix();
 sma = AddState(sma, 'Name', 'state_0',...
     'Timer', 0,...
@@ -130,26 +168,34 @@ sma = AddState(sma, 'Name', 'wait_Cin',...
 sma = AddState(sma, 'Name', 'Cin',...
     'Timer', TaskParameters.GUI.SampleTime,...
     'StateChangeConditions', {CenterPortOut, 'EarlyWithdrawal','Tup','stillSampling'},...
-    'OutputActions', {strcat('PWM',num2str(CenterPort)),255});
+    'OutputActions', StimStartOutput);
 if TaskParameters.GUI.Jackpot
 sma = AddState(sma, 'Name', 'stillSampling',...
     'Timer', TaskParameters.GUI.JackpotTime-TaskParameters.GUI.SampleTime,...
-    'StateChangeConditions', {CenterPortOut, 'wait_Sin','Tup','stillSamplingJackpot'},...
-    'OutputActions', {strcat('PWM',num2str(CenterPort)),255});
+    'StateChangeConditions', {CenterPortOut, 'stop_stim','Tup','stillSamplingJackpot'},...
+    'OutputActions', StimStart2Output);
 sma = AddState(sma, 'Name', 'stillSamplingJackpot',...
     'Timer', TaskParameters.GUI.ChoiceDeadline-TaskParameters.GUI.JackpotTime-TaskParameters.GUI.SampleTime,...
-    'StateChangeConditions', {CenterPortOut, 'wait_SinJackpot','Tup','ITI'},...
-    'OutputActions', {strcat('PWM',num2str(CenterPort)),255});
+    'StateChangeConditions', {CenterPortOut, 'stop_stim','Tup','ITI'},...
+    'OutputActions', StimStart2Output);
+sma = AddState(sma, 'Name', 'stop_stim',...
+    'Timer',0.001,...
+    'StateChangeConditions', {'Tup','wait_SinJackpot'},...
+    'OutputActions',StimStopOutput);
 else
     sma = AddState(sma, 'Name', 'stillSampling',...
     'Timer', TaskParameters.GUI.ChoiceDeadline,...
-    'StateChangeConditions', {CenterPortOut, 'wait_Sin','Tup','wait_Sin'},...
-    'OutputActions', {strcat('PWM',num2str(CenterPort)),255});
+    'StateChangeConditions', {CenterPortOut, 'stop_stim','Tup','stop_stim'},...
+    'OutputActions', StimStart2Output);
+sma = AddState(sma, 'Name', 'stop_stim',...
+    'Timer',0.001,...
+    'StateChangeConditions', {'Tup','wait_Sin'},...
+    'OutputActions',StimStopOutput);
 end
 sma = AddState(sma, 'Name', 'wait_Sin',...
     'Timer',TaskParameters.GUI.ChoiceDeadline,...
     'StateChangeConditions', {LeftPortIn,'water_L',RightPortIn,'water_R','Tup','ITI'},...
-    'OutputActions',{strcat('PWM',num2str(LeftPort)),0,strcat('PWM',num2str(RightPort)),0});
+    'OutputActions',{strcat('PWM',num2str(LeftPort)),255,strcat('PWM',num2str(RightPort)),255});
 sma = AddState(sma, 'Name', 'water_L',...
     'Timer', LeftValveTime,...
     'StateChangeConditions', {'Tup','ITI'},...
@@ -161,7 +207,7 @@ sma = AddState(sma, 'Name', 'water_R',...
 sma = AddState(sma, 'Name', 'wait_SinJackpot',...
     'Timer',TaskParameters.GUI.ChoiceDeadline,...
     'StateChangeConditions', {LeftPortIn,'water_LJackpot',RightPortIn,'water_RJackpot','Tup','ITI'},...
-    'OutputActions',{strcat('PWM',num2str(LeftPort)),0,strcat('PWM',num2str(RightPort)),0});
+    'OutputActions',{strcat('PWM',num2str(LeftPort)),255,strcat('PWM',num2str(RightPort)),255});
 sma = AddState(sma, 'Name', 'water_LJackpot',...
     'Timer', LeftValveTimeJackpot,...
     'StateChangeConditions', {'Tup','ITI'},...
@@ -173,7 +219,7 @@ sma = AddState(sma, 'Name', 'water_RJackpot',...
 sma = AddState(sma, 'Name', 'EarlyWithdrawal',...
     'Timer', TaskParameters.GUI.EarlyWithdrawalTimeOut,...
     'StateChangeConditions', {'Tup','ITI'},...
-    'OutputActions', {'SoftCode',11});
+    'OutputActions', {'SoftCode',PunishSoundAction});
 if TaskParameters.GUI.VI
     sma = AddState(sma, 'Name', 'ITI',...
         'Timer',exprnd(TaskParameters.GUI.FI),...
@@ -223,6 +269,19 @@ end
 BpodSystem.Data.Custom.ChoiceLeft(iTrial+1) = NaN;
 BpodSystem.Data.Custom.EarlyWithdrawal(iTrial+1) = false;
 BpodSystem.Data.Custom.Jackpot(iTrial+1) = false;
+
+%stimuli
+if ~BpodSystem.EmulatorMode
+    if TaskParamters.GUI.PlayStimulus == 2
+        [BpodSystem.Data.Custom.RightClickTrain,BpodSystem.Data.Custom.LeftClickTrain] = getClickStimulus(BpodSystem.Data.Custom.MaxSampleTime);
+        SendCustomPulseTrain(1, BpodSystem.Data.Custom.RightClickTrain, ones(1,length(BpodSystem.Data.Custom.RightClickTrain))*5);
+        SendCustomPulseTrain(2, BpodSystem.Data.Custom.LeftClickTrain, ones(1,length(BpodSystem.Data.Custom.LeftClickTrain))*5);
+    elseif TaskParamters.GUI.PlayStimulus == 3
+        InitiatePsychtoolbox();
+        BpodSystem.Data.Custom.FreqStimulus = getFreqStimulus(BpodSystem.Data.Custom.MaxSampleTime);
+        PsychToolboxSoundServer('Load', 1, BpodSystem.Data.Custom.FreqStimulus);
+    end
+end
 
 %jackpot time
 if  TaskParameters.GUI.Jackpot
@@ -290,4 +349,28 @@ SendTrialStatusToServer(script,BpodSystem.Data.Custom.Rig,outcome,BpodSystem.Dat
 catch
 end
 
+end
+
+function [RightClickTrain,LeftClickTrain]=getClickStimulus(time)
+l = ceil(rand(1,1)*100);
+r=100-l;
+RightClickTrain=GeneratePoissonClickTrain(r,time);
+LeftClickTrain=GeneratePoissonClickTrain(l,time);
+end
+
+function Sound = getFreqStimulus(time)
+StimulusSettings=struct();
+            StimulusSettings.SamplingRate = 192000; % Sound card sampling rate;
+            StimulusSettings.ramp = 0.003;
+            StimulusSettings.nFreq = 18; % Number of different frequencies to sample from
+            StimulusSettings.ToneOverlap = 0.6667;
+            StimulusSettings.ToneDuration = 0.03;
+            StimulusSettings.Noevidence=0;
+            StimulusSettings.minFreq = 5000 ;
+            StimulusSettings.maxFreq = 40000 ;
+            StimulusSettings.UseMiddleOctave=0;
+            StimulusSettings.Volume=50;
+            StimulusSettings.nTones = floor((time-StimulusSettings.ToneDuration*StimulusSettings.ToneOverlap)/(StimulusSettings.ToneDuration*(1-StimulusSettings.ToneOverlap))); %number of tones
+            newFracHigh = rand(1,1);
+            [Sound, ~, ~] = GenerateToneCloudDual(newFracHigh, StimulusSettings);
 end
