@@ -44,6 +44,9 @@ end
 % SoundCal(1,2).MaxBandLimit = SoundCal(1,1).MaxBandLimit;
 % SoundCal(1,2).FsOut = SoundCal(1,1).FsOut;
 % 
+if size(SoundCal,2)<2
+    SoundCal(1,2)=SoundCal(1,1);
+end
 toneAtt = [polyval(SoundCal(1,1).Coefficient,toneFreq)' polyval(SoundCal(1,2).Coefficient,toneFreq)'];
 diffSPL = Volume - [SoundCal(1,1).TargetSPL SoundCal(1,2).TargetSPL];
 attFactor = sqrt(10.^(diffSPL./10));
